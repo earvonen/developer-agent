@@ -273,13 +273,36 @@ def run_forever(settings: Settings, state: StateStore) -> None:
                 settings.issue_label,
                 settings.github_token,
             )
-            if issues:
-                logger.debug("Found %s open issue(s) with label %r", len(issues), settings.issue_label)
+            pending = [
+                i
+                for i in issues
+                if not state.is_issue_processed(_issue_workspace_key(i))
+            ]
+            if pending:
+                logger.info(
+                    "Poll: %s open issue(s) with label %r on %s/%s (%s already processed); "
+                    "%s pending",
+                    len(issues),
+                    settings.issue_label,
+                    src.owner,
+                    src.repo,
+                    len(issues) - len(pending),
+                    len(pending),
+                )
+            else:
+                logger.info(
+                    "Poll: no pending work — %s open issue(s) with label %r on %s/%s%s; "
+                    "sleeping %ss",
+                    len(issues),
+                    settings.issue_label,
+                    src.owner,
+                    src.repo,
+                    " (all already processed)" if issues else "",
+                    settings.poll_interval_seconds,
+                )
 
-            for issue in issues:
+            for issue in pending:
                 issue_key = _issue_workspace_key(issue)
-                if state.is_issue_processed(issue_key):
-                    continue
 
                 logger.info(
                     "Processing issue #%s: %s",
