@@ -18,7 +18,7 @@ The model then implements the task in a **local git clone** (branch = **`DEVELOP
 
 ## MCP tool names and kwargs
 
-Defaults assume common parameter names (`owner`, `repo`, `state`, `labels` for listing; `owner`, `repo`, `title`, `body`, `head`, `base` for create PR). If your server differs, set:
+Defaults assume common parameter names (`owner`, `repo`, `state`, `labels` for listing — **`labels` is sent as a list of strings**, e.g. `["my-label"]`, which matches MCP servers that expect `[]string`). For create PR: `owner`, `repo`, `title`, `body`, `head`, `base`. If your server differs, set:
 
 - **`DEVELOPER_MCP_LIST_ISSUES_EXTRA_JSON`** — JSON object **merged** into the list-issues kwargs (overrides keys).
 - **`DEVELOPER_MCP_CREATE_PULL_REQUEST_EXTRA_JSON`** — same for create PR.

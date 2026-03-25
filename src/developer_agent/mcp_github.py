@@ -129,13 +129,22 @@ def list_open_labeled_issues_via_mcp(
         "owner": owner,
         "repo": repo,
         "state": "open",
-        "labels": lab,
+        # Many GitHub MCP servers expect labels as []string, not a single string.
+        "labels": [lab],
     }
     if settings.mcp_list_issues_extra_json:
         extra = json.loads(settings.mcp_list_issues_extra_json)
         if not isinstance(extra, dict):
             raise ValueError("DEVELOPER_MCP_LIST_ISSUES_EXTRA_JSON must be a JSON object")
         kwargs.update(extra)
+
+    raw_labels = kwargs.get("labels")
+    if isinstance(raw_labels, str):
+        kwargs["labels"] = [raw_labels] if raw_labels.strip() else []
+    elif raw_labels is None:
+        kwargs["labels"] = []
+    elif isinstance(raw_labels, list):
+        kwargs["labels"] = [str(x) for x in raw_labels if str(x).strip()]
 
     tool = settings.mcp_list_issues_tool.strip()
     if not tool:
@@ -144,11 +153,19 @@ def list_open_labeled_issues_via_mcp(
     text = invoke_mcp_tool(client, tool, kwargs)
     parsed = _parse_json_loose(text)
     if parsed is None:
-        logger.warning(
-            "Could not parse JSON from MCP tool %r (excerpt): %s",
-            tool,
-            text[:500],
-        )
+        excerpt = text[:500]
+        if "parameter" in excerpt.lower() and "coerc" in excerpt.lower():
+            logger.warning(
+                "MCP tool %r rejected arguments (check types, e.g. labels as a list of strings): %s",
+                tool,
+                excerpt,
+            )
+        else:
+            logger.warning(
+                "Could not parse JSON from MCP tool %r (excerpt): %s",
+                tool,
+                excerpt,
+            )
         return []
 
     issues = _issues_from_mcp_payload(parsed)
