@@ -12,11 +12,15 @@ from developer_agent.config import Settings
 from developer_agent.git_repo import (
     GitSource,
     clone_repository,
-    create_branch_commit_push_pr,
+    commit_branch_and_push,
     git_repo_summary,
     git_source_from_clone_url,
 )
-from developer_agent.github_issues import GitHubIssue, list_open_labeled_issues
+from developer_agent.mcp_github import (
+    GitHubIssue,
+    create_pull_request_via_mcp,
+    list_open_labeled_issues_via_mcp,
+)
 from developer_agent.llama_tools import run_tool_assisted_fix
 from developer_agent.state_store import StateStore
 
@@ -196,34 +200,33 @@ def process_github_issue(
 
     pr_url: str | None = None
     pr_via = "github_mcp"
+    base_branch = (src.default_branch_hint or "").strip() or "main"
+    pr_title = f"fix(#{issue.number}): {issue.title}"[:250]
+    pr_body = (
+        f"Automated change from **Developer** (GitHub issue agent).\n\n"
+        f"Addresses #{issue.number}: [{issue.title}]({issue.html_url})\n\n"
+        f"### Implementation summary\n\n{llm_summary}\n"
+    )
+
     if settings.dry_run_no_pr:
-        logger.info("DEVELOPER_DRY_RUN_NO_PR set; skipping PR creation")
+        logger.info("DEVELOPER_DRY_RUN_NO_PR set; skipping commit, push, and MCP pull request")
         pr_via = "dry_run"
     elif settings.github_token:
-        branch = branch_hint
-        pr_title = f"fix(#{issue.number}): {issue.title}"[:250]
-        pr_body = (
-            f"Automated change from **Developer** (GitHub issue agent).\n\n"
-            f"Addresses #{issue.number}: [{issue.title}]({issue.html_url})\n\n"
-            f"### Implementation summary\n\n{llm_summary}\n"
-        )
         try:
-            pr_url = create_branch_commit_push_pr(
+            push_status = commit_branch_and_push(
                 ws,
-                branch_name=branch,
+                branch_name=branch_hint,
                 token=settings.github_token,
                 owner=src.owner,
                 repo=src.repo,
-                title=pr_title,
-                body=pr_body,
                 base_branch=src.default_branch_hint,
             )
         except Exception:
-            logger.exception("Failed to create pull request for %s/%s", src.owner, src.repo)
+            logger.exception("Failed to commit or push for %s/%s", src.owner, src.repo)
             state.mark_issue_processed(
                 issue_key,
                 {
-                    "reason": "pr_failed",
+                    "reason": "push_failed",
                     "issue": issue.number,
                     "title": issue.title,
                     "repository": f"{src.owner}/{src.repo}",
@@ -231,13 +234,45 @@ def process_github_issue(
                 },
             )
             return
-        pr_via = "github_rest"
+
+        if push_status == "no_changes":
+            pr_url = "(no local changes; skipping PR)"
+        elif settings.mcp_create_pull_request_tool.strip():
+            try:
+                pr_url = create_pull_request_via_mcp(
+                    client,
+                    settings,
+                    owner=src.owner,
+                    repo=src.repo,
+                    title=pr_title,
+                    body=pr_body,
+                    head=branch_hint,
+                    base=base_branch,
+                )
+            except Exception:
+                logger.exception("MCP create pull request failed for %s/%s", src.owner, src.repo)
+                state.mark_issue_processed(
+                    issue_key,
+                    {
+                        "reason": "pr_failed",
+                        "issue": issue.number,
+                        "title": issue.title,
+                        "repository": f"{src.owner}/{src.repo}",
+                        "model_summary_excerpt": llm_summary[:8000],
+                    },
+                )
+                return
+        else:
+            logger.info(
+                "DEVELOPER_MCP_CREATE_PULL_REQUEST_TOOL empty; branch pushed without opening a PR from the agent"
+            )
+            pr_url = None
     else:
         logger.info(
-            "GITHUB_TOKEN unset: skipping in-app PR/push; expecting GitHub MCP to have opened a PR if needed"
+            "GITHUB_TOKEN unset: skipping local commit/push; use GitHub MCP during the model run for remote updates"
         )
 
-    logger.info("Pull request result: %s", pr_url or "(none from app; see GitHub MCP / model summary)")
+    logger.info("Pull request result: %s", pr_url or "(none; see MCP / model summary)")
     state.mark_issue_processed(
         issue_key,
         {
@@ -267,11 +302,12 @@ def run_forever(settings: Settings, state: StateStore) -> None:
 
     while True:
         try:
-            issues = list_open_labeled_issues(
+            issues = list_open_labeled_issues_via_mcp(
+                client,
+                settings,
                 src.owner,
                 src.repo,
                 settings.issue_label,
-                settings.github_token,
             )
             pending = [
                 i

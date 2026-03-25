@@ -31,6 +31,11 @@ def _tool_result_to_text(result: Any) -> str:
     return str(result)
 
 
+def tool_invocation_content_as_text(result: Any) -> str:
+    """Normalize MCP tool return values to text (shared by the chat loop and direct MCP calls)."""
+    return _tool_result_to_text(result)
+
+
 def _safe_rel_path(repo_root: Path, rel: str) -> Path:
     rel = rel.strip().lstrip("/").replace("\\", "/")
     if ".." in rel.split("/"):

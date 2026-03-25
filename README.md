@@ -1,19 +1,29 @@
 # Developer (developer-agent)
 
-**Developer** is a Python service that **polls GitHub** for **open issues** on the repository configured in its **ConfigMap** (or environment). It keeps only issues that carry a **configurable label**, at a **configurable interval**. For each new issue, it drives a **Llama Stack** model with **MCP tools** (for example **GitHub**) plus local **workspace** file tools. The model implements the task described in the issue inside a **clone** of the repo on the configured **source branch**, then opens a **pull request** with that branch as **both** checkout and **PR base** (GitHub MCP and/or in-process REST when `GITHUB_TOKEN` is set).
+**Developer** is a Python service that **polls for GitHub issues** on the repository configured in its **ConfigMap** (or environment), filtered by a **label** and **interval**. Listing issues and **opening pull requests** go **only through your GitHub MCP server**, using Llama Stack’s **`tool_runtime.invoke_tool`** (no direct `api.github.com` calls from this app).
+
+The model then implements the task in a **local git clone** (branch = **`DEVELOPER_GIT_BRANCH`**). After the run, the agent can **commit and push** over **git** when **`GITHUB_TOKEN`** is set; the **PR** is created with the configured **MCP** tool, not the GitHub REST API.
 
 ## Flow
 
-1. Every **`DEVELOPER_POLL_INTERVAL_SECONDS`**, lists **open** issues on **`DEVELOPER_GIT_CLONE_URL`**’s GitHub repo that have the label **`DEVELOPER_ISSUE_LABEL`** (excluding pull requests).
-2. **Skips** issues already recorded in **`DEVELOPER_STATE_FILE`** under `processed_issues`.
-3. **Clones** the repo at **`DEVELOPER_GIT_BRANCH`** into a workspace (public HTTPS if no token; use **`GITHUB_TOKEN`** for private repos, the GitHub REST issues API, and optional REST PR creation).
-4. Runs the model with the issue **title** and **body** as the task; the model may use GitHub MCP and workspace tools.
-5. Optionally **commits, pushes, and opens a PR** via REST when **`GITHUB_TOKEN`** is set; the PR **base** is **`DEVELOPER_GIT_BRANCH`**. The PR body references the issue.
+1. Every **`DEVELOPER_POLL_INTERVAL_SECONDS`**, invokes MCP tool **`DEVELOPER_MCP_LIST_ISSUES_TOOL`** (default `list_issues`) with owner/repo/label/state, parses the JSON/text response, and keeps issues that look like GitHub issues (not pull requests).
+2. **Skips** issues already in **`DEVELOPER_STATE_FILE`** under `processed_issues`.
+3. **Clones** via **git** using **`DEVELOPER_GIT_CLONE_URL`** at **`DEVELOPER_GIT_BRANCH`** (`GITHUB_TOKEN` optional for private HTTPS clone).
+4. Runs the **Llama Stack** model with MCP + workspace tools; the model should use **GitHub MCP** for anything that needs GitHub’s API.
+5. If **`GITHUB_TOKEN`** is set and **`DEVELOPER_DRY_RUN_NO_PR`** is false: **commit + push** the feature branch, then call MCP tool **`DEVELOPER_MCP_CREATE_PULL_REQUEST_TOOL`** (default `create_pull_request`) to open the PR (**base** = **`DEVELOPER_GIT_BRANCH`**). Optional **`DEVELOPER_MCP_*_EXTRA_JSON`** merges extra kwargs for your MCP server’s schema.
 
 ## Prerequisites
 
-- **Llama Stack** reachable at **`LLAMA_STACK_BASE_URL`** (and optional **`LLAMA_STACK_API_KEY`** / **`LLAMA_STACK_MODEL_ID`**).
-- **MCP tool groups** registered with that stack (at minimum **GitHub** for typical workflows), with IDs that match **`DEVELOPER_TOOL_GROUP_IDS`**.
+- **Llama Stack** at **`LLAMA_STACK_BASE_URL`**, with GitHub MCP **registered** (same tool group IDs as **`DEVELOPER_TOOL_GROUP_IDS`**). Use **`DEVELOPER_MCP_REGISTRATIONS_JSON`** if the stack does not already expose the GitHub MCP.
+
+## MCP tool names and kwargs
+
+Defaults assume common parameter names (`owner`, `repo`, `state`, `labels` for listing; `owner`, `repo`, `title`, `body`, `head`, `base` for create PR). If your server differs, set:
+
+- **`DEVELOPER_MCP_LIST_ISSUES_EXTRA_JSON`** — JSON object **merged** into the list-issues kwargs (overrides keys).
+- **`DEVELOPER_MCP_CREATE_PULL_REQUEST_EXTRA_JSON`** — same for create PR.
+
+Set **`DEVELOPER_MCP_CREATE_PULL_REQUEST_TOOL`** to an empty string to push without having the agent call a create-PR tool (e.g. you rely on the model alone to open the PR via MCP).
 
 ## Run locally
 
@@ -27,7 +37,7 @@ export DEVELOPER_ISSUE_LABEL=developer-task
 export DEVELOPER_POLL_INTERVAL_SECONDS=120
 export LLAMA_STACK_BASE_URL=http://localhost:8321
 export DEVELOPER_TOOL_GROUP_IDS=mcp-github
-export GITHUB_TOKEN=ghp_...   # recommended for issues API rate limits and REST PR fallback
+export GITHUB_TOKEN=ghp_...   # optional: HTTPS git clone/push only
 
 developer-agent
 # or: python -m developer_agent
@@ -43,54 +53,38 @@ podman build -f Containerfile -t developer-agent:latest .
 
 | Variable | Required | Default | Meaning |
 |----------|----------|---------|---------|
-| `DEVELOPER_GIT_CLONE_URL` | **Yes** | — | Git clone URL (`https://…` or `git@github.com:…`). Used to clone and to resolve `owner/repo` for GitHub API and REST PRs. |
-| `DEVELOPER_GIT_BRANCH` | **Yes** | — | Branch to check out; **PR merge base is the same branch**. |
-| `DEVELOPER_ISSUE_LABEL` | **Yes** | — | Only issues with this **exact** GitHub label name are processed. |
+| `DEVELOPER_GIT_CLONE_URL` | **Yes** | — | Git clone URL; used to resolve `owner/repo` and for local clone. |
+| `DEVELOPER_GIT_BRANCH` | **Yes** | — | Branch to check out; **PR base** when opening via MCP. |
+| `DEVELOPER_ISSUE_LABEL` | **Yes** | — | Label filter passed into the list-issues MCP tool. |
 | `LLAMA_STACK_BASE_URL` | **Yes** | — | Llama Stack HTTP base URL. |
-| `DEVELOPER_TOOL_GROUP_IDS` | **Yes** | — | Comma-separated tool group IDs (e.g. `mcp-github`). |
+| `DEVELOPER_TOOL_GROUP_IDS` | **Yes** | — | Comma-separated tool group IDs (must include GitHub MCP). |
+| `DEVELOPER_MCP_LIST_ISSUES_TOOL` | No | `list_issues` | MCP tool name for listing issues. |
+| `DEVELOPER_MCP_LIST_ISSUES_EXTRA_JSON` | No | — | JSON object merged into list-issues kwargs. |
+| `DEVELOPER_MCP_CREATE_PULL_REQUEST_TOOL` | No | `create_pull_request` | MCP tool to open a PR after push; empty = skip. |
+| `DEVELOPER_MCP_CREATE_PULL_REQUEST_EXTRA_JSON` | No | — | JSON object merged into create-PR kwargs. |
 | `DEVELOPER_POLL_INTERVAL_SECONDS` | No | `120` | Sleep between poll loops. |
-| `DEVELOPER_STATE_FILE` | No | `/tmp/developer-agent-state.json` | JSON file of processed issue keys (issue numbers as strings). |
-| `DEVELOPER_WORKSPACE_ROOT` | No | `/tmp/developer-workspaces` | Parent directory for per-issue clone directories. |
+| `DEVELOPER_STATE_FILE` | No | `/tmp/developer-agent-state.json` | JSON state file. |
+| `DEVELOPER_WORKSPACE_ROOT` | No | `/tmp/developer-workspaces` | Clone parent directory. |
 | `DEVELOPER_GIT_CLONE_DEPTH` | No | `50` | Shallow clone depth. |
-| `DEVELOPER_MAX_LLM_ITERATIONS` | No | `40` | Max chat completion rounds (tool loops). |
-| `DEVELOPER_PR_BRANCH_PREFIX` | No | `developer` | Prefix for suggested feature branch names. |
-| `DEVELOPER_DRY_RUN_NO_PR` | No | `false` | If `true`, skip REST PR creation after the model run. |
-| `DEVELOPER_MCP_REGISTRATIONS_JSON` | No | — | JSON array to register MCP SSE endpoints at startup. |
-| `GITHUB_TOKEN` | No | — | Private clone, GitHub issues listing, REST PR fallback. |
-| `LLAMA_STACK_API_KEY` | No | — | Optional API key for Llama Stack. |
-| `LLAMA_STACK_MODEL_ID` | No | — | Optional; otherwise the first listed model is used. |
-
-### Optional MCP registrations
-
-Pass as **`DEVELOPER_MCP_REGISTRATIONS_JSON`** (single-line string in a `ConfigMap`).
+| `DEVELOPER_MAX_LLM_ITERATIONS` | No | `40` | Max tool loop rounds. |
+| `DEVELOPER_PR_BRANCH_PREFIX` | No | `developer` | Branch name prefix. |
+| `DEVELOPER_DRY_RUN_NO_PR` | No | `false` | Skip commit, push, and MCP PR. |
+| `DEVELOPER_MCP_REGISTRATIONS_JSON` | No | — | Optional MCP SSE registrations at startup. |
+| `GITHUB_TOKEN` | No | — | **Git HTTPS only** (clone/push); not used for GitHub REST. |
+| `LLAMA_STACK_API_KEY` | No | — | Optional Llama Stack API key. |
+| `LLAMA_STACK_MODEL_ID` | No | — | Optional model id. |
 
 ## State file
 
-`DEVELOPER_STATE_FILE` stores JSON like:
-
-```json
-{
-  "processed_issues": {
-    "42": {
-      "issue": 42,
-      "title": "...",
-      "repository": "org/repo",
-      "pull_request": "https://github.com/org/repo/pull/99",
-      "pr_via": "github_rest"
-    }
-  }
-}
-```
-
-Delete an entry or the file to re-process an issue. Mount a **PersistentVolumeClaim** on `/var/lib/developer-agent` in OpenShift if you need state across pod restarts.
+`pr_via` is typically `github_mcp`. There is no `github_rest` path anymore.
 
 ## Layout
 
 | Path | Role |
 |------|------|
 | `src/developer_agent/main.py` | Poll loop, orchestration |
-| `src/developer_agent/github_issues.py` | GitHub REST: list labeled open issues |
-| `src/developer_agent/git_repo.py` | Clone URL → `GitSource`, clone, optional REST PR |
-| `src/developer_agent/llama_tools.py` | Llama Stack tool loop (MCP + workspace tools) |
-| `src/developer_agent/config.py` | Settings / env parsing |
-| `src/developer_agent/state_store.py` | Processed issue persistence |
+| `src/developer_agent/mcp_github.py` | MCP invoke for issues + PR; response parsing |
+| `src/developer_agent/git_repo.py` | Clone URL → `GitSource`, clone, commit/push (git only) |
+| `src/developer_agent/llama_tools.py` | Llama Stack chat + MCP tool loop |
+| `src/developer_agent/config.py` | Settings |
+| `src/developer_agent/state_store.py` | Processed issues |

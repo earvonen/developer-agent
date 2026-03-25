@@ -56,6 +56,27 @@ class Settings(BaseSettings):
         validation_alias="DEVELOPER_TOOL_GROUP_IDS",
     )
 
+    mcp_list_issues_tool: str = Field(
+        "list_issues",
+        description="MCP tool name (GitHub server) used to list open issues; invoked via Llama Stack",
+        validation_alias="DEVELOPER_MCP_LIST_ISSUES_TOOL",
+    )
+    mcp_list_issues_extra_json: str | None = Field(
+        None,
+        description="Optional JSON object merged into list-issues MCP kwargs (override param names/values)",
+        validation_alias="DEVELOPER_MCP_LIST_ISSUES_EXTRA_JSON",
+    )
+    mcp_create_pull_request_tool: str = Field(
+        "create_pull_request",
+        description="MCP tool name to open a PR after local commit/push; empty string disables this step",
+        validation_alias="DEVELOPER_MCP_CREATE_PULL_REQUEST_TOOL",
+    )
+    mcp_create_pull_request_extra_json: str | None = Field(
+        None,
+        description="Optional JSON object merged into create-pull-request MCP kwargs",
+        validation_alias="DEVELOPER_MCP_CREATE_PULL_REQUEST_EXTRA_JSON",
+    )
+
     mcp_registrations_json: str | None = Field(
         None,
         validation_alias="DEVELOPER_MCP_REGISTRATIONS_JSON",
@@ -65,8 +86,8 @@ class Settings(BaseSettings):
     github_token: str | None = Field(
         None,
         validation_alias="GITHUB_TOKEN",
-        description="Optional: HTTPS clone of private repos, GitHub issues API, REST PR fallback. "
-        "If unset, public repos only and rely on GitHub MCP for PRs when possible.",
+        description="Optional: HTTPS git clone/push to GitHub only (not the GitHub REST API). "
+        "Issue listing and PR creation use MCP via Llama Stack.",
     )
     git_clone_depth: int = Field(50, validation_alias="DEVELOPER_GIT_CLONE_DEPTH")
     workspace_root: str = Field("/tmp/developer-workspaces", validation_alias="DEVELOPER_WORKSPACE_ROOT")

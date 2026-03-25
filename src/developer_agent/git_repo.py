@@ -52,7 +52,7 @@ def git_source_from_clone_url(clone_url: str, branch: str) -> GitSource | None:
 
 
 def _owner_repo_from_clone_url(clone_url: str) -> tuple[str, str] | None:
-    """Best-effort owner/repo for GitHub PRs and logging; supports https and git@ GitHub, else URL path tail."""
+    """Best-effort owner/repo for logging; supports https and git@ GitHub, else URL path tail."""
     u = clone_url.strip()
     m = _GITHUB_HTTPS.search(u)
     if m:
@@ -147,18 +147,17 @@ def git_repo_summary(repo_path: Path, max_lines: int = 200) -> str:
     return "\n".join(lines)
 
 
-def create_branch_commit_push_pr(
+def commit_branch_and_push(
     repo_path: Path,
     branch_name: str,
     token: str,
     owner: str,
     repo: str,
-    title: str,
-    body: str,
     base_branch: str | None,
 ) -> str:
     """
-    Commit all changes, push branch, open a pull request via GitHub REST API.
+    Create a feature branch from the configured base, commit all changes, push to origin.
+    Returns ``no_changes`` if the tree is clean, otherwise ``pushed``.
     """
     r = Repo(repo_path)
     with r.config_writer() as cw:
@@ -166,60 +165,27 @@ def create_branch_commit_push_pr(
         cw.set_value("user", "email", "developer-agent@users.noreply.github.local")
     configured_base = (base_branch or "").strip() or None
 
-    if r.is_dirty(untracked_files=True):
-        if configured_base:
+    if not r.is_dirty(untracked_files=True):
+        return "no_changes"
+
+    if configured_base:
+        try:
+            r.git.checkout(configured_base)
+        except Exception:
             try:
-                r.git.checkout(configured_base)
-            except Exception:
-                try:
-                    r.git.checkout(f"origin/{configured_base}")
-                except Exception as e:
-                    logger.warning(
-                        "Could not checkout PR base %r before creating %r (dirty tree may block switch): %s",
-                        configured_base,
-                        branch_name,
-                        e,
-                    )
-        r.git.checkout("-b", branch_name)
-        r.git.add(all=True)
-        r.git.commit("-m", "fix: implement task from GitHub issue (Developer agent)")
-    else:
-        return "(no local changes; skipping PR)"
+                r.git.checkout(f"origin/{configured_base}")
+            except Exception as e:
+                logger.warning(
+                    "Could not checkout base %r before creating %r: %s",
+                    configured_base,
+                    branch_name,
+                    e,
+                )
+    r.git.checkout("-b", branch_name)
+    r.git.add(all=True)
+    r.git.commit("-m", "fix: implement task from GitHub issue (Developer agent)")
 
     auth_url = _authenticated_clone_url(f"https://github.com/{owner}/{repo}.git", token)
     r.git.remote("set-url", "origin", auth_url)
     r.git.push("--set-upstream", "origin", branch_name)
-
-    import json
-    import urllib.error
-    import urllib.request
-
-    base = configured_base
-    if not base:
-        try:
-            base = r.git.rev_parse("--abbrev-ref", "origin/HEAD").replace("origin/", "")
-        except Exception:
-            base = "main"
-
-    logger.info("GitHub PR: base=%r head=%r", base, branch_name)
-
-    url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
-    payload = {"title": title, "body": body, "head": branch_name, "base": base}
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return str(data.get("html_url", data))
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"GitHub PR API error {e.code}: {err_body}") from e
+    return "pushed"
