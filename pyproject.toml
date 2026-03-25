@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "developer-agent"
+version = "0.1.0"
+description = "Developer: GitHub labeled issues → Llama Stack + MCP + Git clone → pull request"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "llama-stack-client>=0.3.0",
+    "GitPython>=3.1.40",
+    "pydantic-settings>=2.2.0",
+]
+
+[project.scripts]
+developer-agent = "developer_agent.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,78 @@
+# Example OpenShift manifests. Adjust namespaces, image, and secrets for your cluster.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: developer-agent
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: developer-agent-config
+data:
+  DEVELOPER_GIT_CLONE_URL: "https://github.com/your-org/your-repo.git"
+  DEVELOPER_GIT_BRANCH: "main"
+  DEVELOPER_ISSUE_LABEL: "developer-task"
+  DEVELOPER_POLL_INTERVAL_SECONDS: "120"
+  DEVELOPER_STATE_FILE: "/var/lib/developer-agent/state.json"
+  DEVELOPER_WORKSPACE_ROOT: "/var/lib/developer-agent/workspaces"
+  LLAMA_STACK_BASE_URL: "http://llamastack-service:8321"
+  # GitHub auth/PAT may also be used by the GitHub MCP server registered with Llama Stack.
+  DEVELOPER_TOOL_GROUP_IDS: "mcp-github"
+  # Optional: register MCP SSE endpoints at startup (JSON array)
+  # DEVELOPER_MCP_REGISTRATIONS_JSON: '[{"toolgroup_id":"mcp::github","mcp_uri":"http://github-mcp:8080/sse"}]'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: developer-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: developer-agent
+  template:
+    metadata:
+      labels:
+        app: developer-agent
+    spec:
+      serviceAccountName: developer-agent
+      containers:
+        - name: developer-agent
+          image: image-registry.openshift-image-registry.svc:5000/agentic-demo/developer-agent:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          envFrom:
+            - configMapRef:
+                name: developer-agent-config
+          env:
+            - name: HOME
+              value: /var/lib/developer-agent
+            # Optional: GITHUB_TOKEN for private clone, GitHub issues API, REST PR fallback
+            # - name: GITHUB_TOKEN
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: developer-agent-github
+            #       key: token
+            # - name: LLAMA_STACK_API_KEY
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: llama-stack-credentials
+            #       key: api-key
+            # - name: LLAMA_STACK_MODEL_ID
+            #   value: "your-registered-model-id"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/developer-agent
+          resources:
+            requests:
+              cpu: "100m"
+              memory: 256Mi
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: data
+          emptyDir: {}

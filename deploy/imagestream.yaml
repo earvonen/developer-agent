@@ -1,0 +1,13 @@
+# ImageStream for the Developer (developer-agent) container image.
+# After a successful push from Tekton to
+# image-registry.openshift-image-registry.svc:5000/<namespace>/developer-agent:<tag>,
+# OpenShift will record tags here (local lookup policy optional).
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: developer-agent
+  labels:
+    app: developer-agent
+spec:
+  lookupPolicy:
+    local: true
