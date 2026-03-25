@@ -24,7 +24,7 @@ spec:
       default: Containerfile
     - name: git-url
       type: string
-      default: https://github.com/your-org/developer-agent.git
+      default: https://github.com/earvonen/developer-agent.git
     - name: git-revision
       type: string
       default: main
