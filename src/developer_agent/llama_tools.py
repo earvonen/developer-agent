@@ -21,11 +21,39 @@ LOCAL_TOOL_NAMES = frozenset(
 )
 
 
+def _flatten_mcp_content_to_text(result: Any) -> str:
+    """
+    Llama Stack often returns tool content as a list of blocks
+    (e.g. TextContentItem with a ``text`` field) rather than a bare string.
+    """
+    if result is None:
+        return ""
+    if isinstance(result, str):
+        return result
+    if isinstance(result, list):
+        parts = [_flatten_mcp_content_to_text(x) for x in result]
+        return "\n".join(p for p in parts if p)
+    text_attr = getattr(result, "text", None)
+    if isinstance(text_attr, str):
+        return text_attr
+    if hasattr(result, "model_dump"):
+        d = result.model_dump(mode="python")
+        if isinstance(d, dict):
+            if isinstance(d.get("text"), str):
+                return d["text"]
+            if isinstance(d.get("content"), list):
+                return _flatten_mcp_content_to_text(d["content"])
+    return ""
+
+
 def _tool_result_to_text(result: Any) -> str:
     if result is None:
         return ""
     if isinstance(result, str):
         return result
+    flat = _flatten_mcp_content_to_text(result)
+    if flat:
+        return flat
     if hasattr(result, "model_dump"):
         return json.dumps(result.model_dump(), default=str)
     return str(result)

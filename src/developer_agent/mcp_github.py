@@ -98,6 +98,13 @@ def _raw_dicts_to_issues(raw: list[dict[str, Any]]) -> list[GitHubIssue]:
 
 
 def _issues_from_mcp_payload(parsed: Any) -> list[GitHubIssue]:
+    # GraphQL / MCP wrappers: {"issues": [...], "totalCount": N, ...}
+    if isinstance(parsed, dict) and isinstance(parsed.get("issues"), list):
+        inner = [x for x in parsed["issues"] if isinstance(x, dict)]
+        if not inner:
+            return []
+        return _raw_dicts_to_issues(inner)
+
     candidates: list[dict[str, Any]] = []
     _deep_find_issue_dicts(parsed, candidates)
     if isinstance(parsed, list):
@@ -170,6 +177,9 @@ def list_open_labeled_issues_via_mcp(
 
     issues = _issues_from_mcp_payload(parsed)
     if not issues and text.strip():
+        # Parsed JSON with an explicit empty ``issues`` array is success, not a warning.
+        if isinstance(parsed, dict) and isinstance(parsed.get("issues"), list):
+            return []
         logger.warning(
             "MCP tool %r returned no recognizable issues; raw excerpt: %s",
             tool,
