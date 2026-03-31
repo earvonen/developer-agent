@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable
 
-from llama_stack_client import LlamaStackClient
+from llama_stack_client import BadRequestError, LlamaStackClient
 from llama_stack_client.types.chat.completion_create_response import (
     ChoiceMessageOpenAIAssistantMessageParamOutput,
 )
@@ -246,6 +246,10 @@ def run_tool_assisted_fix(
     system_prompt: str,
     user_prompt: str,
     max_iterations: int,
+    *,
+    max_tool_output_chars: int = 30000,
+    max_chat_history_chars: int = 350000,
+    max_context_retries: int = 1,
 ) -> str:
     mcp_defs, name_to_group = collect_mcp_tool_definitions(client, tool_group_ids)
     openai_tools = build_openai_tools_from_defs(mcp_defs) + local_tool_definitions()
@@ -265,15 +269,88 @@ def run_tool_assisted_fix(
         ),
     }
 
-    last_text = ""
-    for i in range(max_iterations):
-        resp = client.chat.completions.create(
-            model=model_id,
-            messages=messages,
-            tools=openai_tools,
-            tool_choice="auto",
-            temperature=0.2,
+    def _truncate(text: str, limit: int) -> tuple[str, bool]:
+        if limit < 1 or not text or len(text) <= limit:
+            return text, False
+        head = max(1, int(limit * 0.6))
+        tail = max(1, limit - head - 200)
+        out = (
+            text[:head]
+            + f"\\n\\n... [truncated {len(text) - (head + tail)} chars] ...\\n\\n"
+            + text[-tail:]
         )
+        return out[:limit], True
+
+    def _messages_char_budget(msgs: list[dict[str, Any]]) -> int:
+        total = 0
+        for m in msgs:
+            c = m.get("content")
+            if isinstance(c, str):
+                total += len(c)
+        return total
+
+    def _prune_messages_in_place(msgs: list[dict[str, Any]], target_chars: int) -> int:
+        \"\"\"\n        Drop oldest tool results first, then oldest assistant messages,\n        while keeping the initial system+user prompts.\n        Returns number of messages removed.\n        \"\"\"\n        removed = 0
+        if len(msgs) <= 2:
+            return 0
+
+        def budget() -> int:
+            return _messages_char_budget(msgs)
+
+        idx = 2
+        while budget() > target_chars and idx < len(msgs):
+            if msgs[idx].get("role") == "tool":
+                msgs.pop(idx)
+                removed += 1
+                continue
+            idx += 1
+
+        idx = 2
+        while budget() > target_chars and idx < len(msgs):
+            if msgs[idx].get("role") == "assistant":
+                msgs.pop(idx)
+                removed += 1
+                continue
+            idx += 1
+
+        while budget() > target_chars and len(msgs) > 2:
+            msgs.pop(2)
+            removed += 1
+        return removed
+
+    def _is_context_length_error(e: Exception) -> bool:
+        s = str(e).lower()
+        return "context length" in s or "input tokens" in s or "maximum input length" in s
+
+    last_text = ""
+    retries_left = max_context_retries
+    i = 0
+    while i < max_iterations:
+        try:
+            resp = client.chat.completions.create(
+                model=model_id,
+                messages=messages,
+                tools=openai_tools,
+                tool_choice="auto",
+                temperature=0.2,
+            )
+        except BadRequestError as e:
+            if retries_left > 0 and _is_context_length_error(e):
+                before = _messages_char_budget(messages)
+                removed = _prune_messages_in_place(
+                    messages, max(20000, int(max_chat_history_chars * 0.7))
+                )
+                after = _messages_char_budget(messages)
+                logger.warning(
+                    "Context limit hit; pruned %s message(s), chars %s -> %s, retrying (%s left)",
+                    removed,
+                    before,
+                    after,
+                    retries_left,
+                )
+                retries_left -= 1
+                continue
+            raise
         choice = resp.choices[0]
         msg = choice.message
         tcalls = getattr(msg, "tool_calls", None) or []
@@ -322,6 +399,15 @@ def run_tool_assisted_fix(
                     except Exception as e:
                         result_text = f"invoke error: {e}"
 
+            raw_len = len(result_text or "")
+            result_text, truncated = _truncate(result_text, max_tool_output_chars)
+            logger.info(
+                "Tool call: %s (chars=%s%s)",
+                fname,
+                raw_len,
+                ", truncated" if truncated else "",
+            )
+
             messages.append(
                 {
                     "role": "tool",
@@ -330,7 +416,16 @@ def run_tool_assisted_fix(
                 }
             )
 
+            if _messages_char_budget(messages) > max_chat_history_chars:
+                removed = _prune_messages_in_place(messages, max_chat_history_chars)
+                if removed:
+                    logger.info(
+                        "Pruned chat history to stay under budget (removed %s message(s))",
+                        removed,
+                    )
+
         logger.debug("LLM iteration %s completed", i + 1)
+        i += 1
     else:
         last_text = last_text or "(max iterations reached)"
 

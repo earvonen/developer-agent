@@ -183,6 +183,9 @@ def process_github_issue(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_iterations=settings.max_llm_iterations,
+            max_tool_output_chars=settings.max_tool_output_chars,
+            max_chat_history_chars=settings.max_chat_history_chars,
+            max_context_retries=settings.max_context_retries,
         )
     except Exception:
         logger.exception("Llama Stack run failed for issue #%s", issue.number)

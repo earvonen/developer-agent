@@ -93,6 +93,21 @@ class Settings(BaseSettings):
     workspace_root: str = Field("/tmp/developer-workspaces", validation_alias="DEVELOPER_WORKSPACE_ROOT")
 
     max_llm_iterations: int = Field(40, validation_alias="DEVELOPER_MAX_LLM_ITERATIONS")
+    max_tool_output_chars: int = Field(
+        30000,
+        validation_alias="DEVELOPER_MAX_TOOL_OUTPUT_CHARS",
+        description="Maximum characters to retain from any single tool result appended to chat history.",
+    )
+    max_chat_history_chars: int = Field(
+        350000,
+        validation_alias="DEVELOPER_MAX_CHAT_HISTORY_CHARS",
+        description="Soft cap on total characters retained in chat history before pruning (approx token proxy).",
+    )
+    max_context_retries: int = Field(
+        1,
+        validation_alias="DEVELOPER_MAX_CONTEXT_RETRIES",
+        description="Retries after a context-length 400 by pruning chat history; keep small (0-2).",
+    )
 
     pr_branch_prefix: str = Field("developer", validation_alias="DEVELOPER_PR_BRANCH_PREFIX")
     dry_run_no_pr: bool = Field(False, validation_alias="DEVELOPER_DRY_RUN_NO_PR")
@@ -101,7 +116,14 @@ class Settings(BaseSettings):
     def tool_group_id_list(self) -> list[str]:
         return [x.strip() for x in self.tool_group_ids.split(",") if x.strip()]
 
-    @field_validator("poll_interval_seconds", "git_clone_depth", "max_llm_iterations")
+    @field_validator(
+        "poll_interval_seconds",
+        "git_clone_depth",
+        "max_llm_iterations",
+        "max_tool_output_chars",
+        "max_chat_history_chars",
+        "max_context_retries",
+    )
     @classmethod
     def _positive(cls, v: int) -> int:
         if v < 1:
