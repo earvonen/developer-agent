@@ -9,7 +9,7 @@ description = "Developer: GitHub labeled issues → Llama Stack + MCP + Git clon
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "llama-stack-client>=0.3.0",
+    "llama-stack-client>=0.6.0,<0.7.0",
     "GitPython>=3.1.40",
     "pydantic-settings>=2.2.0",
 ]
