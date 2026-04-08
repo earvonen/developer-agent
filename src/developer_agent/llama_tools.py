@@ -276,7 +276,7 @@ def run_tool_assisted_fix(
         tail = max(1, limit - head - 200)
         out = (
             text[:head]
-            + f"\\n\\n... [truncated {len(text) - (head + tail)} chars] ...\\n\\n"
+            + f"\n\n... [truncated {len(text) - (head + tail)} chars] ...\n\n"
             + text[-tail:]
         )
         return out[:limit], True
@@ -290,7 +290,12 @@ def run_tool_assisted_fix(
         return total
 
     def _prune_messages_in_place(msgs: list[dict[str, Any]], target_chars: int) -> int:
-        \"\"\"\n        Drop oldest tool results first, then oldest assistant messages,\n        while keeping the initial system+user prompts.\n        Returns number of messages removed.\n        \"\"\"\n        removed = 0
+        """
+        Drop oldest tool results first, then oldest assistant messages,
+        while keeping the initial system+user prompts.
+        Returns number of messages removed.
+        """
+        removed = 0
         if len(msgs) <= 2:
             return 0
 
