@@ -6,9 +6,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from llama_stack_client import BadRequestError, LlamaStackClient
-from llama_stack_client.types.chat.completion_create_response import (
-    ChoiceMessageOpenAIAssistantMessageParamOutput,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -207,9 +204,7 @@ def collect_mcp_tool_definitions(
     return all_defs, name_to_group
 
 
-def _assistant_to_message_dict(
-    msg: ChoiceMessageOpenAIAssistantMessageParamOutput | Any,
-) -> dict[str, Any]:
+def _assistant_to_message_dict(msg: Any) -> dict[str, Any]:
     out: dict[str, Any] = {"role": "assistant"}
     if msg.content is not None:
         if isinstance(msg.content, str):
