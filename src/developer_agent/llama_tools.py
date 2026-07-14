@@ -7,6 +7,8 @@ from typing import Any, Callable
 
 from llama_stack_client import BadRequestError, LlamaStackClient
 
+from developer_agent.connector_tools import collect_mcp_tools, invoke_tool, list_connectors, uses_legacy_tool_runtime
+
 logger = logging.getLogger(__name__)
 
 LOCAL_TOOL_NAMES = frozenset(
@@ -30,6 +32,11 @@ def _flatten_mcp_content_to_text(result: Any) -> str:
     if isinstance(result, list):
         parts = [_flatten_mcp_content_to_text(x) for x in result]
         return "\n".join(p for p in parts if p)
+    if isinstance(result, dict):
+        if isinstance(result.get("text"), str):
+            return result["text"]
+        if isinstance(result.get("content"), list):
+            return _flatten_mcp_content_to_text(result["content"])
     text_attr = getattr(result, "text", None)
     if isinstance(text_attr, str):
         return text_attr
@@ -182,26 +189,8 @@ def collect_mcp_tool_definitions(
     client: LlamaStackClient,
     tool_group_ids: list[str],
 ) -> tuple[list[Any], dict[str, str]]:
-    """
-    Returns tool defs for chat and a map tool_name -> toolgroup_id for invoke_tool routing.
-    """
-    all_defs: list[Any] = []
-    name_to_group: dict[str, str] = {}
-    for gid in tool_group_ids:
-        defs = client.tool_runtime.list_tools(tool_group_id=gid)
-        for d in defs:
-            n = d.name
-            if n in name_to_group:
-                logger.warning(
-                    "Skipping duplicate MCP tool name %r (already from group %s, also in %s)",
-                    n,
-                    name_to_group[n],
-                    gid,
-                )
-                continue
-            name_to_group[n] = gid
-            all_defs.append(d)
-    return all_defs, name_to_group
+    """Returns tool defs for chat and a map tool_name -> connector/group id for invoke routing."""
+    return collect_mcp_tools(client, tool_group_ids)
 
 
 def _assistant_to_message_dict(msg: Any) -> dict[str, Any]:
@@ -246,8 +235,9 @@ def run_tool_assisted_fix(
     max_chat_history_chars: int = 350000,
     max_context_retries: int = 1,
 ) -> str:
-    mcp_defs, name_to_group = collect_mcp_tool_definitions(client, tool_group_ids)
+    mcp_defs, name_to_route = collect_mcp_tool_definitions(client, tool_group_ids)
     openai_tools = build_openai_tools_from_defs(mcp_defs) + local_tool_definitions()
+    connectors = [] if uses_legacy_tool_runtime(client) else list_connectors(client)
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -386,12 +376,18 @@ def run_tool_assisted_fix(
                 except Exception as e:
                     result_text = f"error: {e}"
             else:
-                tg = name_to_group.get(fname)
+                tg = name_to_route.get(fname)
                 if not tg:
                     result_text = f"unknown tool {fname!r} (not in MCP tool groups)"
                 else:
                     try:
-                        inv = client.tool_runtime.invoke_tool(tool_name=fname, kwargs=args)
+                        inv = invoke_tool(
+                            client,
+                            fname,
+                            args,
+                            connector_id=tg,
+                            connectors=connectors,
+                        )
                         if inv.error_message:
                             result_text = f"error: {inv.error_message}"
                         else:

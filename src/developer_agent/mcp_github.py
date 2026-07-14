@@ -9,6 +9,7 @@ from typing import Any
 from llama_stack_client import LlamaStackClient
 
 from developer_agent.config import Settings
+from developer_agent.connector_tools import invoke_tool, list_connectors, resolve_connector
 from developer_agent.llama_tools import tool_invocation_content_as_text
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,23 @@ class GitHubIssue:
     html_url: str
 
 
-def invoke_mcp_tool(client: LlamaStackClient, tool_name: str, kwargs: dict[str, Any]) -> str:
-    inv = client.tool_runtime.invoke_tool(tool_name=tool_name, kwargs=kwargs)
+def _github_connector_id(client: LlamaStackClient, settings: Settings) -> str | None:
+    connectors = list_connectors(client)
+    for gid in settings.tool_group_id_list:
+        connector = resolve_connector(gid, connectors)
+        if connector:
+            return connector.connector_id
+    return None
+
+
+def invoke_mcp_tool(
+    client: LlamaStackClient,
+    tool_name: str,
+    kwargs: dict[str, Any],
+    *,
+    connector_id: str | None = None,
+) -> str:
+    inv = invoke_tool(client, tool_name, kwargs, connector_id=connector_id)
     if inv.error_message:
         raise RuntimeError(f"MCP tool {tool_name!r} failed: {inv.error_message}")
     return tool_invocation_content_as_text(inv.content)
@@ -135,8 +151,7 @@ def list_open_labeled_issues_via_mcp(
     kwargs: dict[str, Any] = {
         "owner": owner,
         "repo": repo,
-        "state": "open",
-        # Many GitHub MCP servers expect labels as []string, not a single string.
+        "state": "OPEN",
         "labels": [lab],
     }
     if settings.mcp_list_issues_extra_json:
@@ -157,7 +172,12 @@ def list_open_labeled_issues_via_mcp(
     if not tool:
         raise ValueError("DEVELOPER_MCP_LIST_ISSUES_TOOL must be non-empty")
 
-    text = invoke_mcp_tool(client, tool, kwargs)
+    text = invoke_mcp_tool(
+        client,
+        tool,
+        kwargs,
+        connector_id=_github_connector_id(client, settings),
+    )
     parsed = _parse_json_loose(text)
     if parsed is None:
         excerpt = text[:500]
@@ -230,7 +250,12 @@ def create_pull_request_via_mcp(
             raise ValueError("DEVELOPER_MCP_CREATE_PULL_REQUEST_EXTRA_JSON must be a JSON object")
         kwargs.update(extra)
 
-    text = invoke_mcp_tool(client, tool, kwargs)
+    text = invoke_mcp_tool(
+        client,
+        tool,
+        kwargs,
+        connector_id=_github_connector_id(client, settings),
+    )
     parsed = _parse_json_loose(text)
     if parsed is not None:
         url = _extract_pr_url_from_parsed(parsed)

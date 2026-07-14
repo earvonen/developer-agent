@@ -51,6 +51,12 @@ Constraints:
 
 
 def _register_mcp_endpoints(client: LlamaStackClient, settings: Settings) -> None:
+    if not hasattr(client, "toolgroups"):
+        if settings.parsed_mcp_registrations():
+            logger.info(
+                "Skipping DEVELOPER_MCP_REGISTRATIONS_JSON: Llama Stack 0.7+ uses stack-config connectors"
+            )
+        return
     for reg in settings.parsed_mcp_registrations():
         try:
             client.toolgroups.register(
